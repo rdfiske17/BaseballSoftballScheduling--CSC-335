@@ -1,0 +1,356 @@
+---
+title: "Final Project Report: A-R-C Baseball Softball Scheduling"
+author: "Riley Fiske & Isaac Wayne"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(readxl)
+library(kableExtra)
+
+```
+
+# Introduction
+
+One may wonder how their favorite sports team has a schedule generated for them every year. Questions may arise, such as what components or restrictions are considered, how is it ensured that every team fulfills these restrictions, why does a team play the teams they do, why does a team have a bye when they do, etc. Scheduling problems such as these can be solved using linear programming. This particular report showcases a linear program to generate Baseball and Softball schedules for the American Rivers Conference (A-R-C) for the 2026 season. Using the R coding language, the RStudio software package, the COIN-OR CBC Linear Program Solver, some rigid mathematics, and some other tools, schedules were generated for both sports that satisfied the constraints presented by the A-R-C Commissioners.
+
+# Description of the Problem
+
+The American Rivers Conference has 9 Baseball teams and 9 Softball teams. They include Buena Vista University (BV), Central College (CEN), Coe College (COE), University of Dubuque (UD), Loras College (LOR), Luther College (LUT), Nebraska Wesleyan University (NWU), Simpson College (SC), and Wartburg College (WAR). For this project, season scheduling will be done for both sports in this conference for their 2026 season.
+
+$$
+\begin{tabular}{l|c|c|c|r} % <-- Alignments:
+      \text{Baseball} & \text{Series} & \text{Special Rule} & \text{Softball} & \text{Series}\\ 
+      \hline
+      \text{3/20/2026} & \text{Weekend 1} & \text{} & \text{} & \text{}\\
+      \text{OPEN} & \text{OPEN} & \text{} & \text{} & \text{}\\
+      \text{3/27/2026} & \text{Weekend 2} & \text{} & \text{} & \text{}\\
+      \text{3/31/2026} & \text{Weekday 1} & \text{} & \text{} & \text{}\\
+      \text{4/3/2026} & \text{Weekend 3} & \text{EASTER} & \text{4/4/2026} & \text{Weekend 1}\\
+      \text{4/7/2026} & \text{Weekday 1} & \text{Only one home} & \text{4/7/2026} & \text{Weekday 1}\\
+      \text{4/10/2026} & \text{Weekend 4} & \text{} & \text{4/11/2026} & \text{Weekend 2}\\
+      \text{4/14/2026} & \text{Weekday 2} & \text{} & \text{4/15/2026} & \text{Weekday 2}\\
+      \text{4/17/2026} & \text{Weekend 5} & \text{} & \text{4/18/2026} & \text{Weekend 3}\\
+      \text{4/21/2026} & \text{Weekday 2} & \text{Only one home} & \text{4/21/2026} & \text{Weekday 3}\\
+      \text{4/24/2026} & \text{Weekend 6} & \text{} & \text{4/25/2026} & \text{Weekend 4}\\
+      \text{OPEN} & \text{OPEN} & \text{} & \text{4/29/2026} & \text{Weekday 4}\\
+      \text{5/1/2026} & \text{Weekend 7} & \text{} & \text{5/2/2026} & \text{Weekend 5}\\
+    \end{tabular}
+$$
+
+Games are usually scheduled in a round-robin series, such that baseball teams play 24 games in a 3-game series against every other team, and softball teams play each other once in a doubleheader. The American Rivers Conference was thorough with their requests for this upcoming season. One of the reasons for scheduling both sports is that some constraints involve the home competition dates for teams from the same school. Other standard requests that were immediately brought to our attention are discussed below.
+
+### A-R-C Requests 
+
+### Round Robin Series
+
+For Baseball, 24 games will be played so that every team plays a 3-game series against every other team. However, a game series will be split between two days of play. For example, a weekend series will start with either a single header or a doubleheader on a Friday followed by a Saturday game against the same team for an alternate double/single header to round off the three-game series. The weekday series for baseball will follow the same pattern, but the first day of play will be a Tuesday of one week, and ending with a day of play the following Tuesday against the same team. Again, one of these days will be a single header and the other will be a double header. The Softball season does not follow this same season structure but has a 16-game round-robin. With this, each softball team plays every other team on one day for a doubleheader series. 
+
+#### Teams are given one bye in the season 
+
+There is an odd number of teams for both softball and baseball, so for every series matchup, there will be a team that is not playing anyone and is instead assigned a bye. Byes will be kept track of to ensure that each team only gets one bye per season and to monitor which teams are playing teams coming off of byes to set up equal matchups.
+
+#### No more than 2 home/away series in a row
+
+For softball, since their games occupy one day of play, this constraint will only be a matter of limiting consecutive home/away series to 2. Baseball scheduling offers an additional challenge with their split weekday series, meaning that a weekday series starts on a Tuesday, that team plays another team the following weekend, and the initial series wraps up with a match that next Tuesday. This constraint will ensure that teams travel appropriately according to their previous series locations.
+
+#### Each team has at least one home contest in the last two weekend series of the season
+
+This constraint will prioritize teams playing at home on one of the final weekends of the season. It will be imperative that teams with a bye on one of these last days of play are guaranteed a home match on the last two dates of the season. This constraint is to fulfill a final home game for the graduating seniors.
+
+It was discovered during the development of this project that this restraint was impossible to satisfy given the odd number of teams, so the range was expanded to the final three weekend series of the season.
+
+#### Local teams play on weekdays, and long-distance teams play on weekends 
+
+Each team has a unique relationship with every other team in terms of classifying them as “long-distance” or “local”. This constraint states that teams that are local will be prioritized to play on weekdays, but more importantly, long-distance teams will be required to play each other on weekends to account for travel.
+
+#### Same Baseball and Softball team home contests must not play on the same weekday 
+
+Schedules for baseball and softball are different, but they do have some overlap with the alternating weekday series for softball which sometimes falls on Tuesdays, when baseball is also scheduled. Therefore, of all the possible weekdays that a home softball series can be played on, only half of them can conflict with a home weekday series for that same school’s baseball team, and in these cases, at least one must be scheduled to play away.
+
+#### Schools without turf get first-week byes or play away
+
+Due to the weather at the beginning of the season, one of the requests states that schools without turf either get a bye or play elsewhere as an away team. This will only hold for the first week of play and any further inclement weather will be handled with end-of-season makeup days.
+
+#### Equalize number of opponents played coming off a bye
+
+To ensure that a team is not only playing teams that had a bye in the previous week, a request was given to set the number of teams a team will play coming off of a bye to no more than 2.
+
+# Methodology
+
+## Software and Methods
+
+This Linear Program was first written out in rigid mathematics as to inform how the software was to operate. The coding language R was used to create the linear program from the family of constraints specified by the mathematics. The linear program solver COIN-OR CBC was used from within the R Script to find an optimal solution for the linear program. Finally, R was utilized to formulate the solution provided by COIN-OR CBC into a human readable format and output as .csv files that can be viewed within programs such as Microsoft Excel.
+
+## Constraints Used
+
+In general, nearly all of the constraints requested by the A-R-C were able to be followed to generate a solution. In short, the constraints used to generate this report are
+
+  + Each team in each sport must play each other team exactly once across all series
+  + Each series must be either home, away, or a bye for each team in each sport
+  + Each team in each sport gets exactly one bye per season
+  + There may not be more than 2 consecutive home series for each team in each sport
+  + There may not be more than 2 consecutive away series for each team in each sport
+  + Each team in each sport gets exactly 4 home games and 4 away games per season
+  + Each team in each sport must have at least one home weekend series in one of the last 3 weekend series
+  + For each weekday series in softball, if a team is at home for a series, the corresponding baseball team is not at home for the corresponding weekday series, and vice-versa
+  + For the first baseball series of the season, schools without turf must not be at home
+  + For team in each sport, for each team they are long distance from, they must play at home or away on one weekend series
+  + For team in each sport, for each team they are local to, they must play at home or away on one weekday series
+  + For each baseball series, it must follow proper ordering specifications (see explanation in Mathematical Methodology)
+  + Loras must have a bye on Easter for Baseball and Softball
+  + Dubuque Baseball in 2026 must have a bye on a weekday series
+  
+## Mathematical Methodology
+
+To solve this scheduling problem via Linear Optimization, we must first declare mathematical sets, then lay out decision variables and constraints using these sets, and finally create an objective function to optimize for.
+
+### Sets
+
+Let $BS$ be the set of sports to schedule: $BS = \{baseball, softball\}$.
+
+Let $T$ be the set of teams in each sport in the American Rivers Conference:
+
+$T = \{BV,CEN,COE,UD,LOR,LUT,NWU,SC,WAR\}$.
+
+Let $S$ be the set of series in a season: $S = \{s_1,s_2,s_3,s_4,s_5,s_6,s_7,s_8,s_9\}$.
+
+Let $S_{E_b} \subseteq S$ be the set of baseball series that occur on weekends: $S_{E_b} = \{s_1,s_2,s_4,s_5,s_7,s_8,s_9\}$.
+
+Let $S_{D_b} \subseteq S$ be the set of baseball series that occur on weekdays: $S_{D_b} = \{s_3,s_6\}$.
+
+Let $S_{E_s} \subseteq S$ be the set of softball series that occur on weekends: $S_{E_s} = \{s_1,s_3,s_5,s_7,s_9\}$.
+
+Let $S_{D_s} \subseteq S$ be the set of softball series that occur on weekdays: $S_{D_s} = \{s_2,s_4,s_6,s_8\}$.
+
+Let $O$ be the set of orderings for the days of play in a series (single/double, double/single, double): $O = \{sd,ds,d\}$.
+
+Let $O_b \subseteq O$ be the set of orderings for the days of play in a baseball series: $O_b = \{sd,ds\}$.
+
+Let $O_s \subseteq O$ the set of orderings for the days of play in a softball series: $O_s = \{d\}$.
+
+$\forall t \in T$, let $F_t$ denote the set of teams that are long distance from team $t$.
+
+$\forall t \in T$, let $C_t$ denote the set of teams that are local to team $t$.
+
+Let $TU$ denote the set of teams that have turf fields: $TU = \{UD,NWU,SC,WAR,BV\}$.
+
+$\forall s \in S_{D_s}$, let $P_b$ denote the set of baseball series that have a date conflict with softball series $s$: $P_{s_2} = \{s_3\}$, $P_{s_4} = \{s_6\}$, and $P_{s_6} = \{s_6\}$.
+
+### Decision Variables
+
+$\forall bs \in BS$, $\forall t_1 \in T$, $\forall t_2 \in T\setminus t_1$, $\forall s \in S$, $\forall o \in O_{bs}$, define
+\[
+x_{t_1, t_2, s, o, bs} = 
+\begin{cases}
+1 & \text{:   $t_1$ plays $t_2$ at home in series $s$ in ordering $o$ in sport $bs$} \\
+0 & \text{:   otherwise}
+\end{cases}
+\]
+
+$\forall bs \in BS$, $\forall t_1 \in T$, $\forall s \in S$, define
+\[
+b_{t_1, s, bs} = 
+\begin{cases}
+1 & \text{:   $t_1$ has a bye in series $s$ for sport $bs$} \\
+0 & \text{:   otherwise}
+\end{cases}
+\]
+
+### Constraints
+
+For each sport and for each series, it must be either home, away, or a bye.
+
+$\forall bs \in BS$, $\forall t_1 \in T$, $\forall s \in S$
+$$
+b_{t_1,s,bs} + \sum_{t_2 \in T \setminus t_1} \sum_{o \in O_{bs}} (x_{t_1,t_2,s,o,bs} + x_{t_2,t_1,s,o,bs}) = 1
+$$
+
+For each sport and for each team, they must play each other team in exactly one series.
+
+$\forall bs \in BS$, $\forall t_1 \in T$, $\forall t_2 \in T \setminus t_1$
+$$
+\sum_{s \in S} \sum_{o \in O_{bs}} (x_{t_1,t_2,s,o,bs} + x_{t_2,t_1,s,o,bs}) = 1
+$$
+
+For each sport and for each team, that team gets exactly one bye per season.
+
+$\forall bs \in BS$, $\forall t_1 \in T$
+$$
+\sum_{s \in S} b_{t_1,s,bs} = 1
+$$
+
+For each sport and for each team, there may not be more than 2 consecutive home series.
+
+$\forall bs \in BS$, $\forall t_1 \in T$, $\forall s \in S \setminus \{s_8,s_9\}$
+$$
+\sum_{s_i = s}^{s_i + 2} \sum_{t_2 \in T \setminus t_1} \sum_{o \in O_{bs}} x_{t_1,t_2,s_i,o,bs} \leq 2
+$$
+
+For each sport and for each team, there may not be more than 2 consecutive away series.
+
+$\forall bs \in BS$, $\forall t_1 \in T$, $\forall s \in S \setminus \{s_8,s_9\}$
+$$
+\sum_{s_i = s}^{s_i + 2} \sum_{t_2 \in T \setminus t_1} \sum_{o \in O_{bs}} x_{t_2,t_1,s_i,o,bs} \leq 2
+$$
+
+For each sport and for each team, they must have at least one home series in one of the last 3 weekend series.
+
+$\forall bs \in BS$, $\forall t_1 \in T$
+$$
+\sum_{t_2 \in T \setminus t_1} \sum_{o \in O_{bs}} (x_{t_1,t_2,s_7,o,bs} + x_{t_1,t_2,s_8,o,bs} + x_{t_1,t_2,s_9,o,bs}) \geq 1
+$$
+
+For each weekday series in softball, if a team is at home for a series, the corresponding baseball team is not at home for the corresponding weekday series, and vice-versa.
+
+$\forall t_1 \in T$, $\forall s_s \in S_{D_s}$, $\forall s_b \in P_{s_s}$
+$$
+\sum_{t_2 \in T \setminus t_1} ([\sum_{o \in O_b} x_{t_1,t_2.s_b,o,baseball}] + x_{t_1,t_2,s_s,d,softball}) \leq 1
+$$
+
+For the first baseball series of the season, schools without turf must not be at home.
+
+$\forall t_1 \in T\setminus TU$
+$$
+\sum_{t_2 \in T \setminus t_1} \sum_{o \in O_{bs}} (x_{t_1,t_2,s_1,o,baseball}) = 0
+$$
+
+For each sport and for each team, for each team they are long distance from, they must play at home or away on one weekend series.
+
+$\forall bs \in BS$, $\forall t_1 \in T$, $\forall t_2 \in F_{t_1}$
+$$
+\sum_{s \in S_{E_{bs}}} \sum_{o \in O_{bs}} (x_{t_1,t_2,s,o,bs} + x_{t_2,t_1,s,o,bs}) = 1
+$$
+
+For each sport and for each team, for each team they are close to, they must play at home or away on one weekday series.
+
+$\forall bs \in BS$, $\forall t_1 \in T$, $\forall t_2 \in C_{t_1}$
+$$
+\sum_{s \in S_{D_{bs}}} \sum_{o \in O_{bs}} (x_{t_1,t_2,s,o,bs} + x_{t_2,t_1,s,o,bs}) = 1
+$$
+
+Dubuque baseball gets a bye on one of the weekday series.
+
+$$
+\sum_{s \in S_{D_b}} b_{UD,s,baseball} = 1
+$$
+
+Loras baseball and softball gets a bye on the weekend series of Easter.
+
+$$
+b_{LOR,s_4,baseball} = 1
+$$
+
+$$
+b_{LOR,s_1,softball} = 1
+$$
+
+#### Orderings
+
+For every team in baseball, insure there are no back-to-back doubleheaders. While writing this out by hand, the series ordering for series 3, 6, and 9 already lock in the ordering for most of the remaining weeks as follows, where $s_{i,j}$ is series $i$ and day $j$ is either a single or double header for some team $t$:
+
+$$
+\begin{tabular}{l|c|c|c|c|c|c|c|c|c|c|c|c|c|c|c|c|r} % <-- Alignments:
+      $s_{1,1}$ & $s_{1,2}$ & $s_{2,1}$ & $s_{2,2}$ & $s_{3,1}$ & $s_{4,1}$ & $s_{4,2}$ & $s_{3,2}$ & $s_{5,1}$ & $s_{5,2}$ & $s_{6,1}$ & $s_{7,1}$ & $s_{7,2}$ & $s_{6,2}$ & $s_{8,1}$ & $s_{8,2}$ & $s_{9,1}$ & $s_{9,2}$\\ 
+      \hline
+      S/D & D/S & S/D & S/D & S & D & S & D & S & D & S & D & S & D & S & D & D & S\\
+    \end{tabular}
+$$    
+
+$s_{3,1}$ had to be a single, and $s_{3,2}$ had to be a double, which forces $s_{5,1}$ to be a single. Similarly, $s_{6,2}$ had to be a double, which forced $s_{8,1}$ and $s_{7,2}$ to be singles. The rest of the games then follow in suit to get the above ordering.
+
+One may question the back-to-back doubleheader in $s_{8,2}$ and $s_{9,1}$, however there is an open weekday game between these weekend series, making back-to-back doubleheaders legal in this case. A similar occurrence is true between series 1 and 2, making back-to-back doubleheaders between $s_{1,2}$ and $s_{2,1}$ legal.
+
+We can now write constraints for the orderings for series 4, 5, 7, and 8 from the above table.
+
+$\forall t_1 \in T$
+$$
+b_{t_1,s_4,baseball} + \sum_{t_2 \in T \setminus t_1} (x_{t_1, t_2, s_4, ds, baseball} + x_{t_2, t_1, s_4, ds, baseball}) = 1
+$$
+
+$$
+b_{t_1,s_5,baseball} + \sum_{t_2 \in T \setminus t_1} (x_{t_1, t_2, s_5, sd, baseball} + x_{t_2, t_1, s_5, sd, baseball}) = 1
+$$
+
+$$
+b_{t_1,s_7,baseball} + \sum_{t_2 \in T \setminus t_1} (x_{t_1, t_2, s_7, ds, baseball} + x_{t_2, t_1, s_7, ds, baseball}) = 1
+$$
+
+$$
+b_{t_1,s_8,baseball} + \sum_{t_2 \in T \setminus t_1} (x_{t_1, t_2, s_8, sd, baseball} + x_{t_2, t_1, s_8, sd, baseball}) = 1
+$$
+
+For every baseball team, series 3 and series 6 will have the order $sd$ if they play that series.
+
+$\forall t_1 \in T$
+$$
+b_{t_1,s_3,baseball} + \sum_{t_2 \in T \setminus t_1} (x_{t_1,t_2,s_3,sd,baseball} + x_{t_2,t_1,s_3,o,baseball}) = 1
+$$
+
+$$
+b_{t_1,s_6,baseball} + \sum_{t_2 \in T \setminus t_1} (x_{t_1,t_2,s_6,sd,baseball} + x_{t_2,t_1,s_6,o,baseball}) = 1
+$$
+
+For every team in baseball, the last series will either be a bye or of the ordering $ds$.
+
+$\forall t_1 \in T$
+$$
+b_{t_1,s_9,baseball} + \sum_{t_2 \in T \setminus t_1} (x_{t_1,t_2,s_9,ds,baseball} + x_{t_2,t_1,s_9,ds,baseball}) = 1
+$$
+
+### Objective Function
+
+For our objective function, we will set all costs to 0 for all decision variables to complete the feasibility problem.
+
+Let $c = 0$ for every decision variable such that the objective function takes the following form and always equals 0:
+$$
+\text{min:} \sum_{bs \in BS} \sum_{t_1 \in T} \sum_{t_2 \in T \setminus t_1} \sum_{s \in S} \sum_{o \in O_{bs}} (c x_{t_1,t_2,s,o,bs} + cb_{t_1,s,bs})
+$$
+
+# Results, Recommendations, and Instructions
+
+## Results
+
+Using the mathematics above, the R software package, and COIN-OR CBC Linear Program Solver, schedules were able to be generated for the 2026 season for both Baseball and Softball. All constraints listed in the constraints section were implemented. Here is a brief output of a sample schedule generated:
+
+```{r sample_schedule, echo = FALSE}
+
+bball = read.csv("results//A-R-C_Baseball_Schedule.csv")
+knitr::kable(bball, format = "latex", align = "c", caption = "Generated Baseball Schedule", label = "bball_table") %>% kable_styling(full_width = F,latex_options=c("scale_down","HOLD_position"))
+
+sball = read.csv("results//A-R-C_Softball_Schedule.csv")
+knitr::kable(sball, format = "latex", align = "c", caption = "Generated Softball Schedule", label = "sball_table") %>% kable_styling(full_width = F,latex_options=c("scale_down","HOLD_position"))
+
+```
+
+The tables above show the weeks vertically, the teams horizontally, and specify if the game to be played is single-double or double-single for Baseball. A blank cell represents a bye for that team in a given week.
+
+## Instructions
+
+To replicate this result, an R-Script is to be attached to this Project Report, entitled Script_A-R-C_Baseball_Softball_Scheduling_2026.r. This script must be run with a folder named "ARC_DATA" in the same directory that will hold datasets in Excel format for input into the model, such as team names, play dates, turf teams, weekday series conflicts, local/long-distance classification, etc.
+
+  + ARC_Teams.xlsx: specify teams within the conference to schedule
+  + ARC_Baseball_Dates_2026.xlsx: specify baseball dates of play, corresponding series name, and weekday/weekend (1 yes, 0 no)
+  + ARC_Softball_Dates_2026.xlsx: specify softball dates of play, corresponding series name, and weekday/weekend (1 yes, 0 no)
+  + ARC_Local_Teams.xlsx: specify what teams are local to each team
+  + ARC_LongDistance_Teams.xlsx: specify what teams are long distance from each each
+  + ARC_Weekday_Conflicts.xlsx: specify for each softball series what baseball series are occurring on the same days
+  
+There are a few restrictions that are hard-coded into the program as to get it working in a timely manner (look for Easter, baseball orderings, last 3 weekends, last series). These will be modified to fit the needs of future years.
+
+The user will also have to download COIN-OR CBC and all R libraries utilized for the project, and set the directory for COIN-OR CBC so that R can locate the program and execute it.
+
+## Recommendations and Solution Assessment
+
+The model and schedule provided are strong in many ways. It follows all of the above specifications and generates a mostly dynamic schedule automatically for the A-R-C that could be used for future years scheduling as well. It is great that it builds Baseball and Softball simultaneously since their schedules are dependent on one-another. For timing of getting this project complete, we were unable to ensure that teams are not playing more than 2 teams coming off of byes or validate that this constraint can even be met. We were also unable to pair schools with teams that had similar spring breaks or commencements. This would require some additional Excel workbooks to pull data from to match the first and last weeks of play for schools that have similar breaks, or add some weights to the objective function to favor match-ups in these weeks of play for schools with similar academic schedules.
+
+Overall, this solution and schedule seems to function better than what is currently being done to generate schedules at the A-R-C. In viewing past years' schedules, it appears these constraints were not all able to be met, and this model meets these constraints as well as generates a possible schedule in a very short amount of time in addition to being flexible to changes for future years' schedules. This solution may only be worse in that it doesn't take into account the spring breaks and commencements of schools, but again with a little more time, I believe this could be worked into the model.
+
+In honestly assessing the model's validity and performance, we are very happy with the results it produced given the scrutiny required for as complex of a problem as this was. No extra assumptions had to be made, aside from assuming there should be exactly 4 home and 4 away games per season for each team late in the development process to simplify the problem for the solver software. The only times this model may present a schedule that is unfeasible for the A-R-C to implement would be if some of the days of play specified conflict with a given school. We also discovered this problem is very delicate in that tweaking much causes infeasibility very quickly, meaning the specifications make the problem impossible to solve.
+
+# Conclusion
+
+In this Linear Optimization Operations Research project, a schedule for both Baseball and Softball for the 2026 season of the American Rivers Conference was generated given a long list of constraints. Although the problem is very tight in it's solution, meaning much change may break it, it was discovered that the problem did in-fact have a solution. This optimal schedule was output to .csv files that can be viewed by the A-R-C commissioners for possible implementation. 
